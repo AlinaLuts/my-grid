@@ -5,7 +5,7 @@ Course: Cloud and Grid Systems
 Stage 1: MIMD PC (multiprocessing.Pool, chunking, speedup analysis).
 """
 
-from __future__ import annotations
+from email import base64mime
 
 import math
 import os
@@ -81,8 +81,6 @@ class GridTopology:
     def from_dataset(cls, data_dir: Path | str, sample_idx: int = 87554) -> "GridTopology":
         """
         Завантаження конкретного зрізу (сценарію) sample_idx з файлів PowerGraph .mat.
-        Витягує реальні навантаження 118 вузлів з Bf.mat та потоки/ліміти 186 ліній з Ef.mat.
-        Якщо датасет відсутній — прозоро перемикається на автономну еталонну модель.
         """
         data_path = Path(data_dir)
         raw_candidates = [
@@ -92,7 +90,7 @@ class GridTopology:
             data_path / "raw",
             data_path,
         ]
-        
+
         found_dir = None
         for cand in raw_candidates:
             if (cand / "blist.mat").exists():
@@ -106,25 +104,19 @@ class GridTopology:
         try:
             import numpy as np
             import h5py
-            import scipy.io as sio
 
             # 1. Читання blist.mat (186 ліній)
             blist_file = found_dir / "blist.mat"
-            try:
-                blist_mat = sio.loadmat(str(blist_file))
-                key = "bList" if "bList" in blist_mat else "blist"
-                blist = np.asarray(blist_mat[key], dtype=np.float64)
-            except Exception:
-                with h5py.File(blist_file, "r") as hf:
-                    key = "bList" if "bList" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
-                    blist = np.array(hf[key], dtype=np.float64)
+            with h5py.File(blist_file, "r") as hf:
+                key = "bList" if "bList" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
+                blist = np.array(hf[key], dtype=np.float64)
 
             if blist.shape == (2, 186):
                 blist = blist.T
 
             n_branches = int(blist.shape[0])
 
-            # 2. Читання зрізу sample_idx з Ef.mat (потоки та ємності 186 ліній)
+            # 2. Читання sample_idx з Ef.mat
             ef_file = found_dir / "Ef.mat"
             ef_sample = None
             if ef_file.exists():
@@ -138,7 +130,7 @@ class GridTopology:
                         arr = arr.T
                     ef_sample = arr
 
-            # 3. Читання зрізу sample_idx з Bf.mat (навантаження 118 вузлів)
+            # 3. Читання sample_idx з Bf.mat
             bf_file = found_dir / "Bf.mat"
             bf_sample = None
             if bf_file.exists():
@@ -156,10 +148,18 @@ class GridTopology:
             for i in range(n_branches):
                 u, v = int(blist[i, 0]), int(blist[i, 1])
                 if ef_sample is not None and i < ef_sample.shape[0]:
-                    flow = abs(float(ef_sample[i, 0]))
-                    raw_cap = float(ef_sample[i, 3])
-                    # Нормалізація ємності для безлімітних ліній або z-score артефактів
-                    capacity = raw_cap if raw_cap > flow * 1.05 else max(1.0, flow * 1.5)
+                    flow = abs(float(ef_sample[i, 0]))          # P_ij
+                    raw_cap = abs(float(ef_sample[i, 3]))       # lr_ij
+
+                    # Захист від артефактів датасету
+                    if raw_cap < 1e-6:
+                        # Немає даних — синтетичний ліміт
+                        capacity = max(1.0, flow * 1.5)
+                    elif raw_cap < flow * 1.05:
+                        # Ліміт менший за потік (z-score артефакт) — трохи піднімаємо
+                        capacity = flow * 1.15
+                    else:
+                        capacity = raw_cap
                 else:
                     flow = 40.0 + ((i * 17) % 80)
                     capacity = flow * 1.4
@@ -173,6 +173,7 @@ class GridTopology:
                     "active": True
                 })
 
+            # 4. Вузли
             n_buses = 118
             buses = []
             for j in range(n_buses):
@@ -183,14 +184,18 @@ class GridTopology:
                 else:
                     load = 15.0 + ((j * 13) % 65)
                     voltage = 1.0
-
                 buses.append({"id": bus_id, "load": float(load), "voltage": float(voltage)})
 
-            print(f"[OK] Успішно завантажено зріз сценарію s={sample_idx} з датасету PowerGraph ({found_dir.name}).")
+            # 5. Діагностика — скільки ліній реально навантажено
+            utils = [abs(b["flow"]) / max(0.01, b["capacity"]) * 100 for b in branches]
+            loaded = sum(1 for u in utils if u > 60)
+            overloaded = sum(1 for u in utils if u > 100)
+            print(f"[OK] s={sample_idx}: {loaded} ліній >60%, {overloaded} ліній >100% (перевантажені)")
+
             return cls(buses=buses, branches=branches)
 
         except Exception as exc:
-            print(f"[УВАГА] Не вдалося зчитати зріз s={sample_idx} з HDF5 ({exc}). Увімкнено автономну модель IEEE-118.")
+            print(f"[УВАГА] Не вдалося зчитати s={sample_idx}: {exc}")
             return cls.build_default_ieee118()
 
     @classmethod
@@ -530,58 +535,30 @@ class GridSimulationEngine:
 
 def compute_node_coordinates(branches: List[Dict[str, Any]], n_buses: int = 118) -> Dict[int, Tuple[float, float]]:
     """
-    Генерує естетичні 2D-координати для 118 підстанцій графа IEEE-118
-    за допомогою детермінованого силового алгоритму (Spring Layout) для Canvas.
+    Завантажує координати IEEE-118 з ieee118_coords.json (kamada_kawai_layout).
+    Якщо файл відсутній — fallback на кругове розміщення.
     """
-    rng = random.Random(118)
-    coords: Dict[int, List[float]] = {}
+    import json
+    from pathlib import Path
     
-    # Початкове кругове розміщення за секторами
+    coords_file = Path(__file__).resolve().parent / "ieee118_coords.json"
+    
+    if coords_file.exists():
+        with open(coords_file, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        # JSON зберігає ключі як рядки — конвертуємо в int
+        return {int(k): tuple(v) for k, v in raw.items()}
+    
+    # Fallback: кругове розміщення
+    print("[WARN] ieee118_coords.json не знайдено, використовується кругове розміщення")
+    coords = {}
     for b_id in range(1, n_buses + 1):
         angle = (b_id / n_buses) * 2 * math.pi
-        radius = 280.0 + (b_id % 4) * 55.0
-        coords[b_id] = [500.0 + radius * math.cos(angle), 380.0 + radius * math.sin(angle) * 0.85]
-
-    # Силова релаксація (50 ітерацій для формування красивої мапи)
-    for _ in range(40):
-        forces = {b_id: [0.0, 0.0] for b_id in coords}
-        # Відштовхування між усіма вузлами
-        b_ids = list(coords.keys())
-        for i in range(len(b_ids)):
-            u = b_ids[i]
-            for j in range(i + 1, min(i + 35, len(b_ids))):
-                v = b_ids[j]
-                dx = coords[u][0] - coords[v][0]
-                dy = coords[u][1] - coords[v][1]
-                dist_sq = max(100.0, dx * dx + dy * dy)
-                dist = math.sqrt(dist_sq)
-                rep = 1800.0 / dist_sq
-                fx = (dx / dist) * rep
-                fy = (dy / dist) * rep
-                forces[u][0] += fx
-                forces[u][1] += fy
-                forces[v][0] -= fx
-                forces[v][1] -= fy
-
-        # Притягування з'єднаних лініями вузлів
-        for br in branches:
-            u, v = br["from_bus"], br["to_bus"]
-            if u in coords and v in coords:
-                dx = coords[v][0] - coords[u][0]
-                dy = coords[v][1] - coords[u][1]
-                dist = max(1.0, math.sqrt(dx * dx + dy * dy))
-                att = (dist - 70.0) * 0.035
-                forces[u][0] += (dx / dist) * att
-                forces[u][1] += (dy / dist) * att
-                forces[v][0] -= (dx / dist) * att
-                forces[v][1] -= (dy / dist) * att
-
-        # Оновлення координат з обмеженням поля
-        for b_id, f in forces.items():
-            coords[b_id][0] = max(40.0, min(960.0, coords[b_id][0] + f[0] * 0.4))
-            coords[b_id][1] = max(40.0, min(700.0, coords[b_id][1] + f[1] * 0.4))
-
-    return {b_id: (round(coords[b_id][0], 1), round(coords[b_id][1], 1)) for b_id in coords}
+        coords[b_id] = (
+            round(500.0 + 300.0 * math.cos(angle), 1),
+            round(360.0 + 300.0 * math.sin(angle), 1)
+        )
+    return coords
 
 
 class InteractiveGridSession:
@@ -760,7 +737,7 @@ class InteractiveGridSession:
                 "id": b_id,
                 "x": coords[0],
                 "y": coords[1],
-                "load": round(b["load"], 1),
+                "load": round(b["load"], 3),
                 "isolated": b_id in self.isolated_nodes
             })
 

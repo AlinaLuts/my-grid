@@ -285,7 +285,7 @@ HTML_PAGE = """<!DOCTYPE html>
                 <button class="btn" onclick="stepCascade()">➡️ Крок каскаду</button>
                 <button class="btn btn-warning" id="btn-play" onclick="togglePlay()">▶ Авто-гра</button>
                 <button class="btn btn-reset" onclick="resetGrid()">🔄 Скинути</button>
-                <button class="btn" id="btn-stress" onclick="toggleStress()" style="background:#7c3aed;" title="Переключити між нормальною (запас 35-65%) та перевантаженою (запас 5-15%) мережею">⚠️ Норм. мережа</button>
+                <button class="btn" id="btn-stress" onclick="toggleStress()" style="background:#7c3aed;" title="Переключити між нормальною (запас 35-65%) та перевантаженою (запас 5-15%) мережею">перевантажена мережа</button>
             </div>
             <canvas id="grid-canvas" width="1000" height="720"></canvas>
             <div id="tooltip"></div>
@@ -318,13 +318,15 @@ HTML_PAGE = """<!DOCTYPE html>
             <div class="panel-card">
                 <h3>🎨 Легенда навантаження ліній</h3>
                 <div class="legend">
-                    <div class="legend-item"><div class="legend-color" style="background: #38bdf8;"></div>0–60% (Норма)</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #10b981;"></div>60–80% (Помірне)</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #f59e0b;"></div>80–100% (Напружене)</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div>>100% (Перегрів)</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #475569; border: 1px dashed #ef4444;"></div>Відключена лінія</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #a855f7; border-radius: 50%;"></div>Підстанція (Вузол)</div>
-                </div>
+    <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div>&gt;90% — критично</div>
+    <div class="legend-item"><div class="legend-color" style="background: #f59e0b;"></div>50–90% — напружено</div>
+    <div class="legend-item"><div class="legend-color" style="background: #10b981;"></div>25–50% — помірно</div>
+    <div class="legend-item"><div class="legend-color" style="background: #38bdf8;"></div>10–25% — норма</div>
+    <div class="legend-item"><div class="legend-color" style="background: #6366f1;"></div>2–10% — слабкий потік</div>
+    <div class="legend-item"><div class="legend-color" style="background: #4975AD;"></div>&lt;2% — майже нуль</div>
+    <div class="legend-item"><div class="legend-color" style="background: #475569; border: 1px dashed #ef4444;"></div>Відключена</div>
+    <div class="legend-item"><div class="legend-color" style="background: #a855f7; border-radius: 50%;"></div>Вузол</div>
+</div>
             </div>
         </div>
     </div>
@@ -413,12 +415,12 @@ HTML_PAGE = """<!DOCTYPE html>
             isStressMode = !isStressMode;
             const btn = document.getElementById('btn-stress');
             if (isStressMode) {
-                btn.innerText = '🔴 Перевантаж.';
-                btn.style.background = '#dc2626';
+                btn.innerText = 'нормальна мережа';
+                btn.style.background = '#3CB371';
                 btn.title = 'Зараз: перевантажена мережа (запас 5-15%). Клікни щоб повернути норму.';
             } else {
-                btn.innerText = '⚠️ Норм. мережа';
-                btn.style.background = '#7c3aed';
+                btn.innerText = 'навантажена мережа';
+                btn.style.background = '#5c0c6e';
                 btn.title = 'Зараз: нормальна мережа (запас 35-65%). Клікни для стрес-режиму.';
             }
             const res = await fetch('/api/stress', {
@@ -495,21 +497,35 @@ HTML_PAGE = """<!DOCTYPE html>
                 } else {
                     ctx.setLineDash([]);
                     const util = br.utilization;
-                    if (util > 100) {
-                        ctx.strokeStyle = '#ef4444';
+                    if (util > 90) {
+                        ctx.strokeStyle = '#ef4444';   // червоний — критично
                         ctx.lineWidth = 3.5;
-                    } else if (util > 80) {
-                        ctx.strokeStyle = '#f59e0b';
-                        ctx.lineWidth = 2.4;
-                    } else if (util > 60) {
-                        ctx.strokeStyle = '#10b981';
-                        ctx.lineWidth = 1.8;
+                    } else if (util > 50) {
+                        ctx.strokeStyle = '#f59e0b';   // оранжевий — напружено
+                        ctx.lineWidth = 2.6;
+                    } else if (util > 25) {
+                        ctx.strokeStyle = '#10b981';   // зелений — помірно
+                        ctx.lineWidth = 2.0;
+                    } else if (util > 10) {
+                        ctx.strokeStyle = '#38bdf8';   // синій — норма
+                        ctx.lineWidth = 1.5;
+                    } else if (util > 2) {
+                        ctx.strokeStyle = '#6366f1';   // індиго — слабкий
+                        ctx.lineWidth = 1.1;
                     } else {
-                        ctx.strokeStyle = '#38bdf8';
-                        ctx.lineWidth = 1.2;
+                        ctx.strokeStyle = '#4975AD';   // темно-сірий — майже нуль
+                        ctx.lineWidth = 0.8;
                     }
                 }
                 ctx.stroke();
+                // Підпис тільки для помітних ліній
+                if (br.active && br.utilization > 20) {
+                    const mx = (u.x + v.x) / 2;
+                    const my = (u.y + v.y) / 2;
+                    ctx.fillStyle = br.utilization > 60 ? '#fca5a5' : '#94a3b8';
+                    ctx.font = 'bold 8px monospace';
+                    ctx.fillText(`${br.utilization}%`, mx + 2, my - 2);
+                }
             });
 
             ctx.setLineDash([]);
@@ -517,7 +533,9 @@ HTML_PAGE = """<!DOCTYPE html>
             // 2. Draw nodes (buses)
             currentState.buses.forEach(b => {
                 ctx.beginPath();
-                ctx.arc(b.x, b.y, b.isolated ? 5 : 4, 0, Math.PI * 2);
+                // Розмір вузла залежно від навантаження
+const size = b.isolated ? 6 : Math.max(3, Math.min(8, 3 + Math.abs(b.load) * 2));
+ctx.arc(b.x, b.y, size, 0, Math.PI * 2);
                 if (b.isolated) {
                     ctx.fillStyle = '#ef4444';
                     ctx.strokeStyle = '#fca5a5';
@@ -549,7 +567,9 @@ HTML_PAGE = """<!DOCTYPE html>
                     tooltip.style.display = 'block';
                     tooltip.style.left = (e.clientX + 14) + 'px';
                     tooltip.style.top = (e.clientY + 14) + 'px';
-                    tooltip.innerHTML = `<b>Підстанція #${b.id}</b><br>Навантаження: ${b.load} МВт<br>Статус: ${b.isolated ? '⚠️ Знеструмлено' : '✅ Активна'}`;
+                    const loadStr = b.load === 0 ? '0 (генератор/баланс)' : b.load.toFixed(3);
+const statusStr = b.isolated ? '⚠️ Знеструмлено' : '✅ Активна';
+tooltip.innerHTML = `<b>Підстанція #${b.id}</b><br>P_net: ${loadStr} МВт<br>Статус: ${statusStr}`;
                     return;
                 }
             }
@@ -599,7 +619,9 @@ class GridHandler(BaseHTTPRequestHandler):
         global GLOBAL_SESSION, _STRESS_MODE, _CURRENT_SAMPLE, _DATA_PATH
         if GLOBAL_SESSION is None:
             topo = GridTopology.build_default_ieee118()
-            GLOBAL_SESSION = InteractiveGridSession(topo)
+            GLOBAL_SESSION = InteractiveGridSession(topo,sample_idx=_CURRENT_SAMPLE, 
+        source_label="dataset"
+)
 
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length) if content_length > 0 else b"{}"
@@ -621,6 +643,7 @@ class GridHandler(BaseHTTPRequestHandler):
                 topo = GridTopology.from_dataset(_DATA_PATH, sample_idx=sid)
                 GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=sid, source_label="dataset")
                 _CURRENT_SAMPLE = sid
+                _STRESS_MODE = False 
             else:
                 # Просто скидає стан до початкових даних датасету
                 GLOBAL_SESSION.reset()
