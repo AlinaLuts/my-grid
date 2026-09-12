@@ -1,0 +1,18 @@
+# Секрети та середовище
+.env
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Локальні нотатки сесій (system.md комітимо, чернетки — ні)
+.agents/*.local
+.agents/sessions/
+
+# Великі файли датасетів (не комітяться на GitHub через ліміт 100 МБ)
+Datasets/
+*.mat
+*.zip
+*.7z
+
