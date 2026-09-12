@@ -227,6 +227,38 @@ class GridTopology:
 
         return cls(buses=buses, branches=branches)
 
+    @classmethod
+    def build_stressed_ieee118(cls) -> "GridTopology":
+        """
+        Перевантажена модель IEEE-118: лінії вже на 85-95% ємності.
+        При N-1 аварії майже гарантований каскадний збій — для демонстрації блекауту.
+        """
+        branches = []
+        for i, (u, v) in enumerate(IEEE118_BRANCHES):
+            base_flow = 55.0 + ((i * 17) % 60)
+            # Малий запас 5-15%: мережа вже близька до межі
+            margin = 1.05 + ((i * 3) % 10) / 100.0
+            capacity = round(base_flow * margin, 2)
+            branches.append({
+                "id": i,
+                "from_bus": u,
+                "to_bus": v,
+                "flow": float(base_flow),
+                "capacity": float(capacity),
+                "active": True
+            })
+
+        buses = []
+        for j in range(1, 119):
+            load_mw = 25.0 + ((j * 13) % 75)
+            buses.append({
+                "id": j,
+                "load": float(load_mw),
+                "voltage": 1.0
+            })
+
+        return cls(buses=buses, branches=branches)
+
 
 def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None = None) -> Dict[str, Any]:
     """
@@ -288,6 +320,8 @@ def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None 
     max_steps = 30
     step = 0
     lost_load = 0.0
+    bus_loads = {b["id"]: b["load"] for b in topology_dict["buses"]}
+    isolated_nodes = set()
 
     # --- 2. Цикл розвитку каскаду (Ланцюгова реакція) ---
     while newly_tripped and step < max_steps:
@@ -302,17 +336,26 @@ def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None 
             v = to_buses[line_id]
 
             # Суміжні активні гілки біля вузлів u та v
-            neighbor_branches = set()
+            neighbor_branches = []
             for b_id in node_to_branches.get(u, []):
                 if active[b_id]:
-                    neighbor_branches.add(b_id)
+                    neighbor_branches.append(b_id)
             for b_id in node_to_branches.get(v, []):
                 if active[b_id]:
-                    neighbor_branches.add(b_id)
+                    neighbor_branches.append(b_id)
+
+            # Перевірка на ізоляцію вузлів u та v (радіальні відводи)
+            if u not in isolated_nodes:
+                if not any(active[b_id] for b_id in node_to_branches.get(u, [])):
+                    isolated_nodes.add(u)
+                    lost_load += bus_loads.get(u, 0.0)
+
+            if v not in isolated_nodes:
+                if not any(active[b_id] for b_id in node_to_branches.get(v, [])):
+                    isolated_nodes.add(v)
+                    lost_load += bus_loads.get(v, 0.0)
 
             if not neighbor_branches:
-                # Вузол відсічено від мережі — втрата навантаження
-                lost_load += spilled_flow * 0.5
                 continue
 
             # Розподіл пропорційно вільному резерву (capacity - flow)
@@ -341,9 +384,9 @@ def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None 
             cascade_trips += 1
 
     # --- 3. Фінальні метрики випробування ---
-    dns_proxy = min(1.0, (lost_load + cascade_trips * 12.0) / total_load)
+    dns_proxy = min(1.0, lost_load / total_load)
     
-    # Критерій блек-ауту: суттєва втрата потужності (> 5%) або масовий обвал ліній (> 10% мережі)
+    # Критерій блек-ауту: відчутна втрата навантаження (> 5%) або масовий обвал ліній (> 10% мережі = 18 ліній)
     is_blackout = bool(dns_proxy >= 0.05 or len(failed_lines) >= 18)
 
     return {
@@ -482,4 +525,255 @@ class GridSimulationEngine:
             "avg_cascade_trips": round(avg_trips, 2),
             "avg_dns": round(avg_dns, 6),
             "top_vulnerable_lines": top_vulnerable
+        }
+
+
+def compute_node_coordinates(branches: List[Dict[str, Any]], n_buses: int = 118) -> Dict[int, Tuple[float, float]]:
+    """
+    Генерує естетичні 2D-координати для 118 підстанцій графа IEEE-118
+    за допомогою детермінованого силового алгоритму (Spring Layout) для Canvas.
+    """
+    rng = random.Random(118)
+    coords: Dict[int, List[float]] = {}
+    
+    # Початкове кругове розміщення за секторами
+    for b_id in range(1, n_buses + 1):
+        angle = (b_id / n_buses) * 2 * math.pi
+        radius = 280.0 + (b_id % 4) * 55.0
+        coords[b_id] = [500.0 + radius * math.cos(angle), 380.0 + radius * math.sin(angle) * 0.85]
+
+    # Силова релаксація (50 ітерацій для формування красивої мапи)
+    for _ in range(40):
+        forces = {b_id: [0.0, 0.0] for b_id in coords}
+        # Відштовхування між усіма вузлами
+        b_ids = list(coords.keys())
+        for i in range(len(b_ids)):
+            u = b_ids[i]
+            for j in range(i + 1, min(i + 35, len(b_ids))):
+                v = b_ids[j]
+                dx = coords[u][0] - coords[v][0]
+                dy = coords[u][1] - coords[v][1]
+                dist_sq = max(100.0, dx * dx + dy * dy)
+                dist = math.sqrt(dist_sq)
+                rep = 1800.0 / dist_sq
+                fx = (dx / dist) * rep
+                fy = (dy / dist) * rep
+                forces[u][0] += fx
+                forces[u][1] += fy
+                forces[v][0] -= fx
+                forces[v][1] -= fy
+
+        # Притягування з'єднаних лініями вузлів
+        for br in branches:
+            u, v = br["from_bus"], br["to_bus"]
+            if u in coords and v in coords:
+                dx = coords[v][0] - coords[u][0]
+                dy = coords[v][1] - coords[u][1]
+                dist = max(1.0, math.sqrt(dx * dx + dy * dy))
+                att = (dist - 70.0) * 0.035
+                forces[u][0] += (dx / dist) * att
+                forces[u][1] += (dy / dist) * att
+                forces[v][0] -= (dx / dist) * att
+                forces[v][1] -= (dy / dist) * att
+
+        # Оновлення координат з обмеженням поля
+        for b_id, f in forces.items():
+            coords[b_id][0] = max(40.0, min(960.0, coords[b_id][0] + f[0] * 0.4))
+            coords[b_id][1] = max(40.0, min(700.0, coords[b_id][1] + f[1] * 0.4))
+
+    return {b_id: (round(coords[b_id][0], 1), round(coords[b_id][1], 1)) for b_id in coords}
+
+
+class InteractiveGridSession:
+    """
+    Сесія для інтерактивної покрокової веб-візуалізації каскаду в реальному часі.
+    Дозволяє спостерігати кожен крок перерозподілу струмів у браузері.
+    """
+
+    def __init__(self, topology: GridTopology, sample_idx: int = 87554, source_label: str = "default"):
+        self.topology = topology
+        self.sample_idx = sample_idx
+        self.source_label = source_label  # "dataset", "stressed", "default"
+        self.node_coords = compute_node_coordinates(topology.branches, topology.n_buses)
+        self.reset()
+
+    def reset(self):
+        """Скидає мережу до початкового здорового робочого стану."""
+        self.active = [True] * self.topology.n_branches
+        self.flows = [float(br["flow"]) for br in self.topology.branches]
+        self.capacities = [float(br["capacity"]) for br in self.topology.branches]
+        self.status = "NORMAL"  # NORMAL, SHOCK, CASCADING, STABLE, BLACKOUT
+        self.step_num = 0
+        self.newly_tripped: List[int] = []
+        self.failed_history: List[int] = []
+        self.isolated_nodes: set[int] = set()
+        self.lost_load = 0.0
+        src = {"dataset": f"датасет s={self.sample_idx}", "stressed": "перевантажена модель", "default": "синтетична IEEE-118"}.get(self.source_label, self.source_label)
+        self.logs: List[str] = [f"Мережа ініціалізована в нормальному стані (118 вузлів, 186 ліній). Джерело: {src}."]
+
+    def trigger_shock(self, k_fault: int = 1, line_id: int | None = None) -> List[int]:
+        """Спричиняє первинну аварію N-k (або вимикає конкретну вказану лінію)."""
+        self.reset()
+        if line_id is not None and 0 <= line_id < self.topology.n_branches:
+            shock_lines = [line_id]
+        else:
+            # Зважений ВИПАДКОВИЙ вибір за навантаженням (Monte Carlo: більш навантажені лінії
+            # мають вищу ймовірність, але кожен натиск дає різний результат)
+            import time as _time
+            rng = random.Random(int(_time.time() * 1000) % (2**31))
+            weights = []
+            for i in range(self.topology.n_branches):
+                util = abs(self.flows[i]) / max(1.0, self.capacities[i])
+                weights.append(max(0.01, util ** 2))
+
+            shock_lines = []
+            remaining = list(range(self.topology.n_branches))
+            rem_weights = list(weights)
+            for _ in range(min(k_fault, len(remaining))):
+                total_w = sum(rem_weights)
+                probs = [w / total_w for w in rem_weights]
+                r = rng.random()
+                cum = 0.0
+                chosen_pos = 0
+                for pos, p in enumerate(probs):
+                    cum += p
+                    if r <= cum:
+                        chosen_pos = pos
+                        break
+                shock_lines.append(remaining.pop(chosen_pos))
+                rem_weights.pop(chosen_pos)
+
+        for l_id in shock_lines:
+            self.active[l_id] = False
+            self.failed_history.append(l_id)
+            self.newly_tripped.append(l_id)
+            u = self.topology.branches[l_id]["from_bus"]
+            v = self.topology.branches[l_id]["to_bus"]
+            self.logs.append(f"⚡ [N-k Шок] Вибито лінію #{l_id} (вузол {u} <-> {v}, потік {self.flows[l_id]:.1f} МВт).")
+
+        self.status = "SHOCK"
+        return shock_lines
+
+    def step_cascade(self) -> Dict[str, Any]:
+        """Виконує РІВНО ОДИН крок хвилі каскадного перерозподілу."""
+        if not self.newly_tripped:
+            if self.status in ("SHOCK", "CASCADING"):
+                self.status = "STABLE"
+                self.logs.append("✅ [Стабілізація] Каскад завершився. Усі активні лінії витримують навантаження.")
+            return self.get_state()
+
+        self.step_num += 1
+        lines_to_process = list(self.newly_tripped)
+        self.newly_tripped = []
+        node_to_branches = self.topology.node_to_branches
+        bus_loads = {b["id"]: b["load"] for b in self.topology.buses}
+
+        for l_id in lines_to_process:
+            spilled = abs(self.flows[l_id])
+            self.flows[l_id] = 0.0
+            u = self.topology.branches[l_id]["from_bus"]
+            v = self.topology.branches[l_id]["to_bus"]
+
+            neighbor_branches = []
+            for b_id in node_to_branches.get(u, []):
+                if self.active[b_id]:
+                    neighbor_branches.append(b_id)
+            for b_id in node_to_branches.get(v, []):
+                if self.active[b_id]:
+                    neighbor_branches.append(b_id)
+
+            # Перевірка на ізоляцію вузлів
+            for node in (u, v):
+                if node not in self.isolated_nodes:
+                    if not any(self.active[b_id] for b_id in node_to_branches.get(node, [])):
+                        self.isolated_nodes.add(node)
+                        loss = bus_loads.get(node, 0.0)
+                        self.lost_load += loss
+                        self.logs.append(f"⚠️ [Ізоляція] Вузол {node} повністю відрізано від мережі! Втрачено {loss:.1f} МВт.")
+
+            if not neighbor_branches:
+                continue
+
+            reserves = [max(0.5, self.capacities[nbr] - abs(self.flows[nbr])) for nbr in neighbor_branches]
+            sum_res = sum(reserves)
+            for nbr, res in zip(neighbor_branches, reserves):
+                delta = (res / sum_res) * spilled
+                self.flows[nbr] += delta
+
+        # Перевірка на перевантаження
+        overloaded = []
+        for i in range(self.topology.n_branches):
+            if self.active[i] and abs(self.flows[i]) > self.capacities[i]:
+                overloaded.append(i)
+
+        if overloaded:
+            self.status = "CASCADING"
+            for ov_id in overloaded:
+                self.active[ov_id] = False
+                self.failed_history.append(ov_id)
+                self.newly_tripped.append(ov_id)
+                u = self.topology.branches[ov_id]["from_bus"]
+                v = self.topology.branches[ov_id]["to_bus"]
+                self.logs.append(
+                    f"🔥 [Крок {self.step_num}] Перевантаження лінії #{ov_id} ({u}<->{v}): "
+                    f"потік {self.flows[ov_id]:.1f} > ліміту {self.capacities[ov_id]:.1f} МВт! Лінію вимкнено релейним захистом."
+                )
+        else:
+            self.status = "STABLE"
+            self.logs.append(f"✅ [Крок {self.step_num}] Нових перевантажень немає. Енергосистема стабілізувалася.")
+
+        # Перевірка на блек-аут
+        total_load = self.topology.to_dict()["total_load"]
+        dns_ratio = self.lost_load / total_load
+        if dns_ratio >= 0.05 or len(self.failed_history) >= 18:
+            self.status = "BLACKOUT"
+            self.logs.append(f"💀 [КАТАСТРОФА] СИСТЕМНИЙ БЛЕКАУТ! Відключено {len(self.failed_history)} ліній.")
+
+        return self.get_state()
+
+    def get_state(self) -> Dict[str, Any]:
+        """Повертає повний знімок для інтерфейсу візуалізації."""
+        total_load = self.topology.to_dict()["total_load"]
+        dns_percent = round((self.lost_load / total_load) * 100, 2)
+
+        branches_view = []
+        for i, br in enumerate(self.topology.branches):
+            flow = round(self.flows[i], 1)
+            cap = round(self.capacities[i], 1)
+            util = round((abs(flow) / max(0.1, cap)) * 100, 1) if self.active[i] else 0.0
+            branches_view.append({
+                "id": i,
+                "u": br["from_bus"],
+                "v": br["to_bus"],
+                "flow": flow,
+                "capacity": cap,
+                "utilization": util,
+                "active": self.active[i],
+                "failed": not self.active[i]
+            })
+
+        buses_view = []
+        for b in self.topology.buses:
+            b_id = b["id"]
+            coords = self.node_coords.get(b_id, (500.0, 350.0))
+            buses_view.append({
+                "id": b_id,
+                "x": coords[0],
+                "y": coords[1],
+                "load": round(b["load"], 1),
+                "isolated": b_id in self.isolated_nodes
+            })
+
+        return {
+            "status": self.status,
+            "step": self.step_num,
+            "sample_idx": self.sample_idx,
+            "source_label": self.source_label,
+            "active_lines": sum(1 for a in self.active if a),
+            "tripped_count": len(self.failed_history),
+            "lost_load_mw": round(self.lost_load, 1),
+            "dns_percent": dns_percent,
+            "buses": buses_view,
+            "branches": branches_view,
+            "logs": self.logs[-12:]  # Останні 12 повідомлень
         }

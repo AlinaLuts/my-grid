@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-CLI & Benchmark Runner for IEEE-118 Power Grid Cascade Simulation.
+CLI, Benchmark Runner & Interactive Web UI for IEEE-118 Power Grid Cascade Simulation.
 Course: Cloud and Grid Systems
-Stage 1: MIMD PC Benchmark (speedup, throughput, P(blackout), Amdahl analysis).
+Stage 1: MIMD PC Benchmark & Interactive Real-Time Cascade Visualizer.
 """
 
 from __future__ import annotations
@@ -11,18 +11,681 @@ import argparse
 import json
 import sys
 import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import List
 
 # Додаємо поточну директорію для імпорту engine
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from engine import GridSimulationEngine, GridTopology
+from engine import (
+    GridSimulationEngine,
+    GridTopology,
+    InteractiveGridSession,
+    compute_node_coordinates,
+)
+
+# Прапорець поточного режиму мережі (normal / stressed)
+_STRESS_MODE: bool = False
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IEEE-118 Power Grid | Симулятор каскадних аварій</title>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-card: rgba(18, 24, 38, 0.85);
+            --border: #1e293b;
+            --accent: #38bdf8;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+        header {
+            background: rgba(15, 23, 42, 0.95);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(12px);
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        .logo span { color: var(--text-muted); font-size: 0.85rem; font-weight: 400; }
+        .header-stats {
+            display: flex;
+            gap: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+        .stat-badge {
+            background: rgba(30, 41, 59, 0.6);
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .stat-badge b { color: var(--accent); }
+        .status-badge {
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.8rem;
+        }
+        .status-NORMAL { background: rgba(16, 185, 129, 0.15); color: var(--success); border: 1px solid var(--success); }
+        .status-SHOCK { background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid var(--warning); }
+        .status-CASCADING { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); animation: pulse 1s infinite; }
+        .status-STABLE { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+        .status-BLACKOUT { background: rgba(220, 38, 38, 0.35); color: #fca5a5; border: 1px solid var(--danger); animation: pulse 0.5s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.75; transform: scale(0.98); }
+        }
+
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 360px;
+            gap: 16px;
+            padding: 16px;
+            flex: 1;
+        }
+        .viewport-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+        .toolbar {
+            background: rgba(15, 23, 42, 0.8);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            background: #0284c7;
+            color: #fff;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s;
+        }
+        .btn:hover { background: #0369a1; transform: translateY(-1px); }
+        .btn-danger { background: #dc2626; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-warning { background: #d97706; }
+        .btn-warning:hover { background: #b45309; }
+        .btn-reset { background: #475569; }
+        .btn-reset:hover { background: #334155; }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        .input-group input, .input-group select {
+            background: #0f172a;
+            border: 1px solid var(--border);
+            color: #fff;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background: radial-gradient(circle at center, #0d1527 0%, #080c16 100%);
+            cursor: crosshair;
+        }
+
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .panel-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .panel-card h3 {
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .log-box {
+            background: #090d16;
+            border: 1px solid #1e293b;
+            border-radius: 8px;
+            padding: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.78rem;
+            height: 280px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .log-entry {
+            line-height: 1.4;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        .log-entry.shock { color: #fbbf24; background: rgba(245, 158, 11, 0.1); }
+        .log-entry.trip { color: #f87171; background: rgba(239, 68, 68, 0.1); }
+        .log-entry.stable { color: #34d399; background: rgba(16, 185, 129, 0.1); }
+        .log-entry.blackout { color: #fca5a5; background: rgba(220, 38, 38, 0.25); font-weight: 700; }
+
+        .legend {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.75rem;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; }
+        .legend-color { width: 14px; height: 14px; border-radius: 3px; }
+
+        #tooltip {
+            position: absolute;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            pointer-events: none;
+            display: none;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">
+            ⚡ IEEE-118 СИМУЛЯТОР
+            <span>MIMD PC • Етап 1 (118 вузлів, 186 ліній)</span>
+        </div>
+        <div class="header-stats">
+            <div class="stat-badge">Сценарій: <b id="disp-sample">87554</b></div>
+            <div class="stat-badge">Активні лінії: <b id="disp-active">186 / 186</b></div>
+            <div class="stat-badge">Втрата DNS: <b id="disp-dns">0.0%</b></div>
+            <div id="status-tag" class="status-badge status-NORMAL">НОРМА</div>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <div class="viewport-card">
+            <div class="toolbar">
+                <div class="input-group">
+                    <label>Сценарій s:</label>
+                    <input type="number" id="inp-sample" value="87554" style="width: 85px;">
+                    <button class="btn btn-reset" onclick="applySample()">Змінити</button>
+                </div>
+                <div class="input-group" style="margin-left: 12px;">
+                    <label>Шок k:</label>
+                    <select id="inp-k">
+                        <option value="1">k = 1 (N-1 аварія)</option>
+                        <option value="2">k = 2 (N-2 подвійна)</option>
+                        <option value="3">k = 3 (стрес-тест)</option>
+                    </select>
+                </div>
+                <button class="btn btn-danger" onclick="triggerShock()">⚡ Вибити N-k</button>
+                <button class="btn" onclick="stepCascade()">➡️ Крок каскаду</button>
+                <button class="btn btn-warning" id="btn-play" onclick="togglePlay()">▶ Авто-гра</button>
+                <button class="btn btn-reset" onclick="resetGrid()">🔄 Скинути</button>
+                <button class="btn" id="btn-stress" onclick="toggleStress()" style="background:#7c3aed;" title="Переключити між нормальною (запас 35-65%) та перевантаженою (запас 5-15%) мережею">⚠️ Норм. мережа</button>
+            </div>
+            <canvas id="grid-canvas" width="1000" height="720"></canvas>
+            <div id="tooltip"></div>
+        </div>
+
+        <div class="side-panel">
+            <div class="panel-card">
+                <h3>📊 Стан каскаду</h3>
+                <div style="display: flex; flex-direction: column; gap: 8px; font-size: 0.85rem;">
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: var(--text-muted)">Крок хвилі каскаду:</span>
+                        <b id="disp-step" style="font-family: 'JetBrains Mono';">0</b>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: var(--text-muted)">Відключено захистом:</span>
+                        <b id="disp-trips" style="color: var(--danger); font-family: 'JetBrains Mono';">0 ліній</b>
+                    </div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span style="color: var(--text-muted)">Знеструмлено навантаження:</span>
+                        <b id="disp-lost" style="color: var(--warning); font-family: 'JetBrains Mono';">0.0 МВт</b>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-card" style="flex: 1;">
+                <h3>📜 Журнал подій релейного захисту</h3>
+                <div class="log-box" id="log-box"></div>
+            </div>
+
+            <div class="panel-card">
+                <h3>🎨 Легенда навантаження ліній</h3>
+                <div class="legend">
+                    <div class="legend-item"><div class="legend-color" style="background: #38bdf8;"></div>0–60% (Норма)</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #10b981;"></div>60–80% (Помірне)</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #f59e0b;"></div>80–100% (Напружене)</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div>>100% (Перегрів)</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #475569; border: 1px dashed #ef4444;"></div>Відключена лінія</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #a855f7; border-radius: 50%;"></div>Підстанція (Вузол)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentState = null;
+        let playTimer = null;
+        const canvas = document.getElementById('grid-canvas');
+        const ctx = canvas.getContext('2d');
+        const tooltip = document.getElementById('tooltip');
+
+        async function fetchState() {
+            const res = await fetch('/api/state');
+            currentState = await res.json();
+            updateUI();
+            render();
+        }
+
+        async function triggerShock() {
+            const k = document.getElementById('inp-k').value;
+            const res = await fetch('/api/shock', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({k: parseInt(k)})
+            });
+            currentState = await res.json();
+            updateUI();
+            render();
+        }
+
+        async function stepCascade() {
+            const res = await fetch('/api/step', {method: 'POST'});
+            currentState = await res.json();
+            updateUI();
+            render();
+            if (currentState.status === 'STABLE' || currentState.status === 'BLACKOUT') {
+                stopPlay();
+            }
+        }
+
+        function togglePlay() {
+            if (playTimer) {
+                stopPlay();
+            } else {
+                document.getElementById('btn-play').innerText = '⏸ Пауза';
+                document.getElementById('btn-play').style.background = '#ea580c';
+                playTimer = setInterval(stepCascade, 450);
+            }
+        }
+
+        function stopPlay() {
+            if (playTimer) {
+                clearInterval(playTimer);
+                playTimer = null;
+                document.getElementById('btn-play').innerText = '▶ Авто-гра';
+                document.getElementById('btn-play').style.background = '#d97706';
+            }
+        }
+
+        async function resetGrid() {
+            stopPlay();
+            const res = await fetch('/api/reset', {method: 'POST'});
+            currentState = await res.json();
+            updateUI();
+            render();
+        }
+
+        let isStressMode = false;
+
+        async function applySample() {
+            stopPlay();
+            const sample = document.getElementById('inp-sample').value;
+            const res = await fetch('/api/reset', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({sample: parseInt(sample), stress: isStressMode})
+            });
+            currentState = await res.json();
+            document.getElementById('disp-sample').innerText = sample;
+            updateUI();
+            render();
+        }
+
+        async function toggleStress() {
+            stopPlay();
+            isStressMode = !isStressMode;
+            const btn = document.getElementById('btn-stress');
+            if (isStressMode) {
+                btn.innerText = '🔴 Перевантаж.';
+                btn.style.background = '#dc2626';
+                btn.title = 'Зараз: перевантажена мережа (запас 5-15%). Клікни щоб повернути норму.';
+            } else {
+                btn.innerText = '⚠️ Норм. мережа';
+                btn.style.background = '#7c3aed';
+                btn.title = 'Зараз: нормальна мережа (запас 35-65%). Клікни для стрес-режиму.';
+            }
+            const res = await fetch('/api/stress', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({stress: isStressMode})
+            });
+            currentState = await res.json();
+            updateUI();
+            render();
+        }
+
+        function updateUI() {
+            if (!currentState) return;
+            document.getElementById('disp-active').innerText = `${currentState.active_lines} / 186`;
+            document.getElementById('disp-dns').innerText = `${currentState.dns_percent}%`;
+            document.getElementById('disp-step').innerText = currentState.step;
+            document.getElementById('disp-trips').innerText = `${currentState.tripped_count} ліній`;
+            document.getElementById('disp-lost').innerText = `${currentState.lost_load_mw} МВт`;
+            // Синхронізація номера сценарію з API (виправляє hardcode 87554)
+            if (currentState.sample_idx !== undefined) {
+                document.getElementById('disp-sample').innerText = currentState.sample_idx;
+                document.getElementById('inp-sample').value = currentState.sample_idx;
+            }
+
+            const tag = document.getElementById('status-tag');
+            tag.className = `status-badge status-${currentState.status}`;
+            const titles = {
+                'NORMAL': 'НОРМА',
+                'SHOCK': 'N-k ШОК',
+                'CASCADING': 'КАСКАДНИЙ ОБВАЛ',
+                'STABLE': 'СТАБІЛІЗОВАНО',
+                'BLACKOUT': 'БЛЕКАУТ'
+            };
+            tag.innerText = titles[currentState.status] || currentState.status;
+
+            // Logs
+            const logBox = document.getElementById('log-box');
+            logBox.innerHTML = '';
+            currentState.logs.forEach(l => {
+                const el = document.createElement('div');
+                el.className = 'log-entry';
+                if (l.includes('Шок')) el.className += ' shock';
+                else if (l.includes('Перевантаження') || l.includes('Ізоляція')) el.className += ' trip';
+                else if (l.includes('Стабілізація') || l.includes('стабілізувалася')) el.className += ' stable';
+                else if (l.includes('БЛЕКАУТ')) el.className += ' blackout';
+                el.innerText = l;
+                logBox.appendChild(el);
+            });
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function render() {
+            if (!currentState) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const buses = {};
+            currentState.buses.forEach(b => { buses[b.id] = b; });
+
+            // 1. Draw branches
+            currentState.branches.forEach(br => {
+                const u = buses[br.u];
+                const v = buses[br.v];
+                if (!u || !v) return;
+
+                ctx.beginPath();
+                ctx.moveTo(u.x, u.y);
+                ctx.lineTo(v.x, v.y);
+
+                if (!br.active) {
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = '#475569';
+                    ctx.lineWidth = 1.2;
+                } else {
+                    ctx.setLineDash([]);
+                    const util = br.utilization;
+                    if (util > 100) {
+                        ctx.strokeStyle = '#ef4444';
+                        ctx.lineWidth = 3.5;
+                    } else if (util > 80) {
+                        ctx.strokeStyle = '#f59e0b';
+                        ctx.lineWidth = 2.4;
+                    } else if (util > 60) {
+                        ctx.strokeStyle = '#10b981';
+                        ctx.lineWidth = 1.8;
+                    } else {
+                        ctx.strokeStyle = '#38bdf8';
+                        ctx.lineWidth = 1.2;
+                    }
+                }
+                ctx.stroke();
+            });
+
+            ctx.setLineDash([]);
+
+            // 2. Draw nodes (buses)
+            currentState.buses.forEach(b => {
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.isolated ? 5 : 4, 0, Math.PI * 2);
+                if (b.isolated) {
+                    ctx.fillStyle = '#ef4444';
+                    ctx.strokeStyle = '#fca5a5';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                } else {
+                    ctx.fillStyle = b.load > 40 ? '#c084fc' : '#a855f7';
+                }
+                ctx.fill();
+
+                // ID label
+                ctx.fillStyle = '#64748b';
+                ctx.font = '8px monospace';
+                ctx.fillText(b.id, b.x + 5, b.y - 3);
+            });
+        }
+
+        // Mouse hover interaction for tooltip
+        canvas.addEventListener('mousemove', (e) => {
+            if (!currentState) return;
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+            const my = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+            // Check hovered node
+            for (const b of currentState.buses) {
+                const dist = Math.hypot(b.x - mx, b.y - my);
+                if (dist < 10) {
+                    tooltip.style.display = 'block';
+                    tooltip.style.left = (e.clientX + 14) + 'px';
+                    tooltip.style.top = (e.clientY + 14) + 'px';
+                    tooltip.innerHTML = `<b>Підстанція #${b.id}</b><br>Навантаження: ${b.load} МВт<br>Статус: ${b.isolated ? '⚠️ Знеструмлено' : '✅ Активна'}`;
+                    return;
+                }
+            }
+
+            tooltip.style.display = 'none';
+        });
+
+        fetchState();
+    </script>
+</body>
+</html>
+"""
+
+# Глобальна сесія та стан для веб-сервера
+GLOBAL_SESSION: InteractiveGridSession | None = None
+_CURRENT_SAMPLE: int = 87554
+_DATA_PATH: Path = Path("Datasets")
+
+
+class GridHandler(BaseHTTPRequestHandler):
+    """Обробник HTTP запитів для інтерактивного веб-симулятора."""
+
+    def log_message(self, format, *args):
+        # Пригнічуємо спам стандартних логів HTTP
+        return
+
+    def do_GET(self):
+        global GLOBAL_SESSION
+        if self.path in ("/", "/index.html"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(HTML_PAGE.encode("utf-8"))
+        elif self.path == "/api/state":
+            if GLOBAL_SESSION is None:
+                topo = GridTopology.build_default_ieee118()
+                GLOBAL_SESSION = InteractiveGridSession(topo)
+            state = GLOBAL_SESSION.get_state()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(json.dumps(state).encode("utf-8"))
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        global GLOBAL_SESSION, _STRESS_MODE, _CURRENT_SAMPLE, _DATA_PATH
+        if GLOBAL_SESSION is None:
+            topo = GridTopology.build_default_ieee118()
+            GLOBAL_SESSION = InteractiveGridSession(topo)
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        data = json.loads(body.decode("utf-8")) if body else {}
+
+        if self.path == "/api/shock":
+            k = int(data.get("k", 1))
+            line_id = data.get("line_id", None)
+            GLOBAL_SESSION.trigger_shock(k_fault=k, line_id=line_id)
+            state = GLOBAL_SESSION.get_state()
+        elif self.path == "/api/step":
+            state = GLOBAL_SESSION.step_cascade()
+        elif self.path == "/api/reset":
+            sample = data.get("sample", None)
+            stress = data.get("stress", _STRESS_MODE)
+            _STRESS_MODE = bool(stress)
+            if sample is not None:
+                sid = int(sample)
+                topo = GridTopology.from_dataset(_DATA_PATH, sample_idx=sid)
+                GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=sid, source_label="dataset")
+                _CURRENT_SAMPLE = sid
+            else:
+                # Просто скидає стан до початкових даних датасету
+                GLOBAL_SESSION.reset()
+            state = GLOBAL_SESSION.get_state()
+        elif self.path == "/api/stress":
+            _STRESS_MODE = bool(data.get("stress", False))
+            if _STRESS_MODE:
+                topo = GridTopology.build_stressed_ieee118()
+                GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=_CURRENT_SAMPLE, source_label="stressed")
+            else:
+                topo = GridTopology.from_dataset(_DATA_PATH, sample_idx=_CURRENT_SAMPLE)
+                GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=_CURRENT_SAMPLE, source_label="dataset")
+            state = GLOBAL_SESSION.get_state()
+        elif self.path == "/api/restore":
+            # Повернення до оригінальних даних датасету для поточного sample
+            _STRESS_MODE = False
+            topo = GridTopology.from_dataset(_DATA_PATH, sample_idx=_CURRENT_SAMPLE)
+            GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=_CURRENT_SAMPLE, source_label="dataset")
+            state = GLOBAL_SESSION.get_state()
+        else:
+            self.send_error(404)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(json.dumps(state).encode("utf-8"))
+
+
+def start_web_server(port: int = 8080, sample_idx: int = 87554, data_path: Path = Path("Datasets")):
+    """Запускає вбудований легковагий веб-сервер для візуалізації каскадів."""
+    global GLOBAL_SESSION, _CURRENT_SAMPLE, _DATA_PATH
+    _CURRENT_SAMPLE = sample_idx
+    _DATA_PATH = data_path
+    print(f"Ініціалізація топології зі зрізом s={sample_idx}...")
+    topo = GridTopology.from_dataset(data_path, sample_idx=sample_idx)
+    GLOBAL_SESSION = InteractiveGridSession(topo, sample_idx=sample_idx, source_label="dataset")
+
+    server = HTTPServer(("0.0.0.0", port), GridHandler)
+    print("=" * 70)
+    print(f"🚀 ВЕБ-СИМУЛЯТОР УСПІШНО ЗАПУЩЕНО!")
+    print(f"👉 Відкрийте у браузері: http://localhost:{port}")
+    print(f"   (Для зупинки сервера натисніть Ctrl+C)")
+    print("=" * 70)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nСервер зупинено.")
+        server.server_close()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="MIMD PC Benchmark for Power Grid IEEE-118 Monte Carlo Simulation"
+        description="MIMD PC Benchmark & Interactive Web Simulator for IEEE-118 Power Grid"
+    )
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Запустити інтерактивний веб-сервер візуалізації на http://localhost:8080"
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Порт для веб-сервера (за замовчуванням: 8080)"
     )
     parser.add_argument(
         "--headless",
@@ -247,17 +910,32 @@ def print_summary_analysis(report: dict) -> None:
 def main() -> None:
     args = parse_args()
 
-    # Валідація параметра k
+    # Якщо користувач запустив інтерактивний сервер
+    if args.serve:
+        start_web_server(port=args.port, sample_idx=args.sample, data_path=args.data)
+        return
+
+    # Валідація параметрів CLI
     if not (1 <= args.k <= 5):
         print(f"Помилка: параметр k повинен бути в межах від 1 до 5 (передано: {args.k}).", file=sys.stderr)
+        sys.exit(1)
+
+    if args.trials <= 0:
+        print(f"Помилка: параметр --trials повинен бути додатним числом (передано: {args.trials}).", file=sys.stderr)
+        sys.exit(1)
+
+    if args.sample < 0:
+        print(f"Помилка: параметр --sample не може бути від'ємним (передано: {args.sample}).", file=sys.stderr)
         sys.exit(1)
 
     # Список воркерів
     if args.workers:
         try:
             workers_list = sorted(list(set(int(x.strip()) for x in args.workers.split(","))))
-        except ValueError:
-            print("Помилка формату --workers. Приклад: --workers 1,2,4", file=sys.stderr)
+            if any(w <= 0 for w in workers_list):
+                raise ValueError("Кількість воркерів повинна бути > 0")
+        except ValueError as err:
+            print(f"Помилка формату --workers ({err}). Приклад: --workers 1,2,4", file=sys.stderr)
             sys.exit(1)
     else:
         workers_list = get_default_workers_list()
