@@ -814,7 +814,8 @@ def run_headless_benchmark(
             n_trials=n_trials,
             n_workers=w,
             k_fault=k_fault,
-            base_seed=100_000 + w * 777
+            # Один и тот же набор случайных сценариев для каждого числа воркеров.
+            base_seed=100_000
         )
         elapsed = time.perf_counter() - start_t
 
@@ -869,8 +870,6 @@ def run_headless_benchmark(
     if plot_path:
         generate_speedup_plot(runs_data, plot_path)
 
-    # Вивід підсумкового аналізу для звіту
-    print_summary_analysis(summary_report)
 
     return summary_report
 
@@ -905,31 +904,6 @@ def generate_speedup_plot(runs_data: list, out_file: Path) -> None:
         print(f"[УВАГА] Не вдалося згенерувати графік: {e}")
 
 
-def print_summary_analysis(report: dict) -> None:
-    """Виводить короткий аналітичний звіт для аудиторної здачі."""
-    runs = report["runs"]
-    first = runs[0]
-    last = runs[-1]
-    top_lines = report["baseline_top_vulnerable_lines"]
-
-    print("\n" + "=" * 70)
-    print("  ГОТОВІ ВІДПОВІДІ ТА АНАЛІТИКА ДЛЯ ЗВІТУ (CLASSROOM)")
-    print("=" * 70)
-    print(f"1. Ймовірність колапсу P(blackout) при k={report['metadata']['k_fault']}: {last['p_blackout']:.4f}")
-    print(f"2. Продуктивність (Throughput):")
-    print(f"   - При 1 воркері: {first['throughput_trials_per_sec']:.1f} випробувань/с")
-    print(f"   - При {last['workers']} воркерах: {last['throughput_trials_per_sec']:.1f} випробувань/с")
-    print(f"3. Підсумкове прискорення (Speedup): {last['speedup']:.2f}x (ефективність: {last['efficiency'] * 100:.1f}%)")
-    print(f"4. Топ-3 найбільш уразливі лінії мережі:")
-    for rank, line in enumerate(top_lines[:3], 1):
-        print(f"   #{rank}: Гілка ID {line['branch_id']} (вузли {line['from_bus']} <-> {line['to_bus']}) "
-              f"— брала участь у {line['failures_in_blackouts']} аваріях ({line['failure_rate']*100:.1f}%)")
-    print("5. Коментар щодо закону Амдала:")
-    print("   Прискорення сублінійне через накладні витрати IPC (міжпроцесна серіалізація через pickle),")
-    print("   створення процесів операційною системою та фінальну редукцію агрегованих результатів.")
-    print("=" * 70 + "\n")
-
-
 def main() -> None:
     args = parse_args()
 
@@ -951,7 +925,7 @@ def main() -> None:
         print(f"Помилка: параметр --sample не може бути від'ємним (передано: {args.sample}).", file=sys.stderr)
         sys.exit(1)
 
-    # Список воркерів
+     # Список воркерів
     if args.workers:
         try:
             workers_list = sorted(list(set(int(x.strip()) for x in args.workers.split(","))))
@@ -960,6 +934,15 @@ def main() -> None:
         except ValueError as err:
             print(f"Помилка формату --workers ({err}). Приклад: --workers 1,2,4", file=sys.stderr)
             sys.exit(1)
+        
+        # Перевірка на перевищення ядер
+        max_cpus = cpu_count()
+        too_many = [w for w in workers_list if w > max_cpus]
+        if too_many:
+            print(f"Помилка: воркери {too_many} перевищують кількість ядер ({max_cpus}).", file=sys.stderr)
+            print(f"Рекомендовано: --workers 1,2,4,...,{max_cpus}", file=sys.stderr)
+            sys.exit(1)
+        
     else:
         workers_list = get_default_workers_list()
 

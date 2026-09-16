@@ -1,0 +1,286 @@
+{
+  "metadata": {
+    "model": "IEEE-118 Power Grid",
+    "nodes": 118,
+    "branches": 186,
+    "sample_index": 69411,
+    "k_fault": 2,
+    "n_trials": 100000,
+    "cpu_count": 12,
+    "timestamp": "2026-09-16 22:50:53"
+  },
+  "runs": [
+    {
+      "workers": 1,
+      "elapsed_sec": 30.5267,
+      "throughput_trials_per_sec": 3275.83,
+      "speedup": 1.0,
+      "efficiency": 1.0,
+      "p_blackout": 0.08517,
+      "avg_cascade_trips": 6.13,
+      "avg_dns": 0.02963,
+      "top_vulnerable_lines": [
+        {
+          "branch_id": 13,
+          "from_bus": 8,
+          "to_bus": 30,
+          "failures_in_blackouts": 8466,
+          "failure_rate": 0.994
+        },
+        {
+          "branch_id": 12,
+          "from_bus": 8,
+          "to_bus": 9,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 8,
+          "from_bus": 5,
+          "to_bus": 8,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 3,
+          "from_bus": 3,
+          "to_bus": 5,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 7,
+          "from_bus": 5,
+          "to_bus": 6,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        }
+      ]
+    },
+    {
+      "workers": 2,
+      "elapsed_sec": 19.366,
+      "throughput_trials_per_sec": 5163.68,
+      "speedup": 1.576,
+      "efficiency": 0.788,
+      "p_blackout": 0.08517,
+      "avg_cascade_trips": 6.13,
+      "avg_dns": 0.02963,
+      "top_vulnerable_lines": [
+        {
+          "branch_id": 13,
+          "from_bus": 8,
+          "to_bus": 30,
+          "failures_in_blackouts": 8466,
+          "failure_rate": 0.994
+        },
+        {
+          "branch_id": 12,
+          "from_bus": 8,
+          "to_bus": 9,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 8,
+          "from_bus": 5,
+          "to_bus": 8,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 3,
+          "from_bus": 3,
+          "to_bus": 5,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 7,
+          "from_bus": 5,
+          "to_bus": 6,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        }
+      ]
+    },
+    {
+      "workers": 4,
+      "elapsed_sec": 13.3794,
+      "throughput_trials_per_sec": 7474.17,
+      "speedup": 2.282,
+      "efficiency": 0.57,
+      "p_blackout": 0.08517,
+      "avg_cascade_trips": 6.13,
+      "avg_dns": 0.02963,
+      "top_vulnerable_lines": [
+        {
+          "branch_id": 13,
+          "from_bus": 8,
+          "to_bus": 30,
+          "failures_in_blackouts": 8466,
+          "failure_rate": 0.994
+        },
+        {
+          "branch_id": 12,
+          "from_bus": 8,
+          "to_bus": 9,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 8,
+          "from_bus": 5,
+          "to_bus": 8,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 3,
+          "from_bus": 3,
+          "to_bus": 5,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 7,
+          "from_bus": 5,
+          "to_bus": 6,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        }
+      ]
+    },
+    {
+      "workers": 8,
+      "elapsed_sec": 10.3742,
+      "throughput_trials_per_sec": 9639.34,
+      "speedup": 2.943,
+      "efficiency": 0.368,
+      "p_blackout": 0.08517,
+      "avg_cascade_trips": 6.13,
+      "avg_dns": 0.02963,
+      "top_vulnerable_lines": [
+        {
+          "branch_id": 13,
+          "from_bus": 8,
+          "to_bus": 30,
+          "failures_in_blackouts": 8466,
+          "failure_rate": 0.994
+        },
+        {
+          "branch_id": 12,
+          "from_bus": 8,
+          "to_bus": 9,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 8,
+          "from_bus": 5,
+          "to_bus": 8,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 3,
+          "from_bus": 3,
+          "to_bus": 5,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 7,
+          "from_bus": 5,
+          "to_bus": 6,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        }
+      ]
+    },
+    {
+      "workers": 12,
+      "elapsed_sec": 13.7436,
+      "throughput_trials_per_sec": 7276.11,
+      "speedup": 2.221,
+      "efficiency": 0.185,
+      "p_blackout": 0.08517,
+      "avg_cascade_trips": 6.13,
+      "avg_dns": 0.02963,
+      "top_vulnerable_lines": [
+        {
+          "branch_id": 13,
+          "from_bus": 8,
+          "to_bus": 30,
+          "failures_in_blackouts": 8466,
+          "failure_rate": 0.994
+        },
+        {
+          "branch_id": 12,
+          "from_bus": 8,
+          "to_bus": 9,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 8,
+          "from_bus": 5,
+          "to_bus": 8,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 3,
+          "from_bus": 3,
+          "to_bus": 5,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        },
+        {
+          "branch_id": 7,
+          "from_bus": 5,
+          "to_bus": 6,
+          "failures_in_blackouts": 8339,
+          "failure_rate": 0.9791
+        }
+      ]
+    }
+  ],
+  "baseline_top_vulnerable_lines": [
+    {
+      "branch_id": 13,
+      "from_bus": 8,
+      "to_bus": 30,
+      "failures_in_blackouts": 8466,
+      "failure_rate": 0.994
+    },
+    {
+      "branch_id": 12,
+      "from_bus": 8,
+      "to_bus": 9,
+      "failures_in_blackouts": 8339,
+      "failure_rate": 0.9791
+    },
+    {
+      "branch_id": 8,
+      "from_bus": 5,
+      "to_bus": 8,
+      "failures_in_blackouts": 8339,
+      "failure_rate": 0.9791
+    },
+    {
+      "branch_id": 3,
+      "from_bus": 3,
+      "to_bus": 5,
+      "failures_in_blackouts": 8339,
+      "failure_rate": 0.9791
+    },
+    {
+      "branch_id": 7,
+      "from_bus": 5,
+      "to_bus": 6,
+      "failures_in_blackouts": 8339,
+      "failure_rate": 0.9791
+    }
+  ]
+}

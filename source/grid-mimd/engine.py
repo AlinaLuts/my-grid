@@ -43,6 +43,124 @@ IEEE118_BRANCHES: List[Tuple[int, int]] = [
 ]
 
 
+def load_powergraph_cascades(data_dir: Path | str, sample_idx: int = 87554) -> dict | None:
+    """
+    Читає .mat файли PowerGraph для конкретного сценарію sample_idx.
+    Повертає словник з сирими масивами: blist, Ef, Bf.
+    Якщо датасет відсутній або помилка — повертає None.
+    """
+    data_path = Path(data_dir)
+    raw_candidates = [
+        data_path / "dataset_cascades" / "ieee118" / "ieee118" / "raw",
+        data_path / "ieee118" / "ieee118" / "raw",
+        data_path / "ieee118" / "raw",
+        data_path / "raw",
+        data_path,
+    ]
+
+    found_dir = None
+    for cand in raw_candidates:
+        if (cand / "blist.mat").exists():
+            found_dir = cand
+            break
+
+    if not found_dir:
+        print(f"[INFO] Файли датасету не знайдено за шляхом {data_path}.")
+        return None
+
+    try:
+        import numpy as np
+        import h5py
+
+        # 1. blist.mat — топологія (186 пар вузлів)
+        blist_file = found_dir / "blist.mat"
+        with h5py.File(blist_file, "r") as hf:
+            key = "bList" if "bList" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
+            blist = np.array(hf[key], dtype=np.float64)
+        if blist.shape == (2, 186):
+            blist = blist.T
+
+        # 2. Ef.mat — потоки та ліміти 186 ліній
+        ef_file = found_dir / "Ef.mat"
+        ef_sample = None
+        if ef_file.exists():
+            with h5py.File(ef_file, "r") as hf:
+                var_name = "E_f_post" if "E_f_post" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
+                ds = hf[var_name]
+                idx = np.unravel_index(sample_idx % ds.size, ds.shape)
+                ref = ds[idx]
+                arr = np.array(hf[ref], dtype=np.float64)
+                if arr.ndim == 2 and arr.shape == (4, 186):
+                    arr = arr.T
+                ef_sample = arr
+
+        # 3. Bf.mat — навантаження 118 вузлів
+        bf_file = found_dir / "Bf.mat"
+        bf_sample = None
+        if bf_file.exists():
+            with h5py.File(bf_file, "r") as hf:
+                var_name = "B_f_tot" if "B_f_tot" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
+                ds = hf[var_name]
+                idx = np.unravel_index(sample_idx % ds.size, ds.shape)
+                ref = ds[idx]
+                arr = np.array(hf[ref], dtype=np.float64)
+                if arr.ndim == 2 and arr.shape == (3, 118):
+                    arr = arr.T
+                bf_sample = arr
+
+        return {"blist": blist, "Ef": ef_sample, "Bf": bf_sample}
+
+    except Exception as exc:
+        print(f"[УВАГА] Не вдалося зчитати .mat (s={sample_idx}): {exc}")
+        return None
+
+def build_topology(blist, ef_sample=None, bf_sample=None) -> dict:
+    """
+    Будує списки buses[] і branches[] з сирих масивів.
+    Повертає словник {"buses": [...], "branches": [...]}.
+    """
+    branches = []
+    n_branches = int(blist.shape[0])
+
+    for i in range(n_branches):
+        u, v = int(blist[i, 0]), int(blist[i, 1])
+        if ef_sample is not None and i < ef_sample.shape[0]:
+            flow = abs(float(ef_sample[i, 0]))       # P_ij
+            raw_cap = abs(float(ef_sample[i, 3]))    # lr_ij
+
+            # Захист від артефактів датасету
+            if raw_cap < 1e-6:
+                capacity = max(1.0, flow * 1.5)
+            elif raw_cap < flow * 1.05:
+                capacity = flow * 1.15
+            else:
+                capacity = raw_cap
+        else:
+            flow = 40.0 + ((i * 17) % 80)
+            capacity = flow * 1.4
+
+        branches.append({
+            "id": i,
+            "from_bus": u,
+            "to_bus": v,
+            "flow": float(flow),
+            "capacity": float(capacity),
+            "active": True
+        })
+
+    buses = []
+    for j in range(118):
+        bus_id = j + 1
+        if bf_sample is not None and j < bf_sample.shape[0]:
+            load = abs(float(bf_sample[j, 0]))
+            voltage = float(bf_sample[j, 2]) if bf_sample.shape[1] > 2 else 1.0
+        else:
+            load = 15.0 + ((j * 13) % 65)
+            voltage = 1.0
+        buses.append({"id": bus_id, "load": float(load), "voltage": float(voltage)})
+
+    return {"buses": buses, "branches": branches}
+
 class GridTopology:
     """
     Зберігає топологію енергосистеми IEEE-118 (118 вузлів, 186 ліній).
@@ -81,122 +199,23 @@ class GridTopology:
     def from_dataset(cls, data_dir: Path | str, sample_idx: int = 87554) -> "GridTopology":
         """
         Завантаження конкретного зрізу (сценарію) sample_idx з файлів PowerGraph .mat.
+        Використовує load_powergraph_cascades() + build_topology().
         """
-        data_path = Path(data_dir)
-        raw_candidates = [
-            data_path / "dataset_cascades" / "ieee118" / "ieee118" / "raw",
-            data_path / "ieee118" / "ieee118" / "raw",
-            data_path / "ieee118" / "raw",
-            data_path / "raw",
-            data_path,
-        ]
+        pg = load_powergraph_cascades(data_dir, sample_idx)
 
-        found_dir = None
-        for cand in raw_candidates:
-            if (cand / "blist.mat").exists():
-                found_dir = cand
-                break
-
-        if not found_dir:
-            print(f"[INFO] Файли датасету не знайдено за шляхом {data_path}. Використовується автономна топологія IEEE-118.")
+        if pg is None:
+            print(f"[INFO] Датасет відсутній — використовується автономна топологія IEEE-118.")
             return cls.build_default_ieee118()
 
-        try:
-            import numpy as np
-            import h5py
+        topo = build_topology(pg["blist"], pg["Ef"], pg["Bf"])
 
-            # 1. Читання blist.mat (186 ліній)
-            blist_file = found_dir / "blist.mat"
-            with h5py.File(blist_file, "r") as hf:
-                key = "bList" if "bList" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
-                blist = np.array(hf[key], dtype=np.float64)
+        # Діагностика
+        utils = [abs(b["flow"]) / max(0.01, b["capacity"]) * 100 for b in topo["branches"]]
+        loaded = sum(1 for u in utils if u > 60)
+        overloaded = sum(1 for u in utils if u > 100)
+        print(f"[OK] s={sample_idx}: {loaded} ліній >60%, {overloaded} ліній >100% (перевантажені)")
 
-            if blist.shape == (2, 186):
-                blist = blist.T
-
-            n_branches = int(blist.shape[0])
-
-            # 2. Читання sample_idx з Ef.mat
-            ef_file = found_dir / "Ef.mat"
-            ef_sample = None
-            if ef_file.exists():
-                with h5py.File(ef_file, "r") as hf:
-                    var_name = "E_f_post" if "E_f_post" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
-                    ds = hf[var_name]
-                    idx = np.unravel_index(sample_idx % ds.size, ds.shape)
-                    ref = ds[idx]
-                    arr = np.array(hf[ref], dtype=np.float64)
-                    if arr.ndim == 2 and arr.shape == (4, 186):
-                        arr = arr.T
-                    ef_sample = arr
-
-            # 3. Читання sample_idx з Bf.mat
-            bf_file = found_dir / "Bf.mat"
-            bf_sample = None
-            if bf_file.exists():
-                with h5py.File(bf_file, "r") as hf:
-                    var_name = "B_f_tot" if "B_f_tot" in hf else [k for k in hf.keys() if not k.startswith("#")][0]
-                    ds = hf[var_name]
-                    idx = np.unravel_index(sample_idx % ds.size, ds.shape)
-                    ref = ds[idx]
-                    arr = np.array(hf[ref], dtype=np.float64)
-                    if arr.ndim == 2 and arr.shape == (3, 118):
-                        arr = arr.T
-                    bf_sample = arr
-
-            branches = []
-            for i in range(n_branches):
-                u, v = int(blist[i, 0]), int(blist[i, 1])
-                if ef_sample is not None and i < ef_sample.shape[0]:
-                    flow = abs(float(ef_sample[i, 0]))          # P_ij
-                    raw_cap = abs(float(ef_sample[i, 3]))       # lr_ij
-
-                    # Захист від артефактів датасету
-                    if raw_cap < 1e-6:
-                        # Немає даних — синтетичний ліміт
-                        capacity = max(1.0, flow * 1.5)
-                    elif raw_cap < flow * 1.05:
-                        # Ліміт менший за потік (z-score артефакт) — трохи піднімаємо
-                        capacity = flow * 1.15
-                    else:
-                        capacity = raw_cap
-                else:
-                    flow = 40.0 + ((i * 17) % 80)
-                    capacity = flow * 1.4
-
-                branches.append({
-                    "id": i,
-                    "from_bus": u,
-                    "to_bus": v,
-                    "flow": float(flow),
-                    "capacity": float(capacity),
-                    "active": True
-                })
-
-            # 4. Вузли
-            n_buses = 118
-            buses = []
-            for j in range(n_buses):
-                bus_id = j + 1
-                if bf_sample is not None and j < bf_sample.shape[0]:
-                    load = abs(float(bf_sample[j, 0]))
-                    voltage = float(bf_sample[j, 2]) if bf_sample.shape[1] > 2 else 1.0
-                else:
-                    load = 15.0 + ((j * 13) % 65)
-                    voltage = 1.0
-                buses.append({"id": bus_id, "load": float(load), "voltage": float(voltage)})
-
-            # 5. Діагностика — скільки ліній реально навантажено
-            utils = [abs(b["flow"]) / max(0.01, b["capacity"]) * 100 for b in branches]
-            loaded = sum(1 for u in utils if u > 60)
-            overloaded = sum(1 for u in utils if u > 100)
-            print(f"[OK] s={sample_idx}: {loaded} ліній >60%, {overloaded} ліній >100% (перевантажені)")
-
-            return cls(buses=buses, branches=branches)
-
-        except Exception as exc:
-            print(f"[УВАГА] Не вдалося зчитати s={sample_idx}: {exc}")
-            return cls.build_default_ieee118()
+        return cls(buses=topo["buses"], branches=topo["branches"])
 
     @classmethod
     def build_default_ieee118(cls) -> "GridTopology":
@@ -484,7 +503,8 @@ class GridSimulationEngine:
             c_size = chunk_size + (1 if w < remainder else 0)
             if c_size > 0:
                 tasks.append((c_size, k_fault, current_seed, topology_dict))
-                current_seed += c_size + 100
+                # Seeds должны зависеть только от номера trial, а не от числа чанков.
+                current_seed += c_size
 
         # Виконання розрахунків (однопотоково без пулу або через multiprocessing.Pool)
         if n_workers == 1:
