@@ -284,6 +284,33 @@ class GridTopology:
         return cls(buses=buses, branches=branches)
 
 
+def find_isolated_nodes(active, node_to_branches, branches, root=1):
+    """
+    Знаходить усі вузли, недосяжні від root через активні лінії.
+    Використовує BFS (пошук у ширину).
+    
+    Повертає set ізольованих вузлів.
+    """
+    # BFS від кореня
+    visited = {root}
+    queue = [root]
+    
+    while queue:
+        node = queue.pop(0)
+        for br_id in node_to_branches.get(node, []):
+            if not active[br_id]:
+                continue
+            # Знайти інший кінець лінії
+            br = branches[br_id]
+            other = br["to_bus"] if br["from_bus"] == node else br["from_bus"]
+            if other not in visited:
+                visited.add(other)
+                queue.append(other)
+    
+    # Всі вузли, яких немає в visited — ізольовані
+    all_nodes = set(node_to_branches.keys())
+    return all_nodes - visited
+
 def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None = None) -> Dict[str, Any]:
     """
     Моделювання одного незалежного сценарію каскадної аварії (Monte Carlo Trial).
@@ -369,15 +396,15 @@ def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None 
                     neighbor_branches.append(b_id)
 
             # Перевірка на ізоляцію вузлів u та v (радіальні відводи)
-            if u not in isolated_nodes:
-                if not any(active[b_id] for b_id in node_to_branches.get(u, [])):
-                    isolated_nodes.add(u)
-                    lost_load += bus_loads.get(u, 0.0)
+            # if u not in isolated_nodes:
+            #     if not any(active[b_id] for b_id in node_to_branches.get(u, [])):
+            #         isolated_nodes.add(u)
+            #         lost_load += bus_loads.get(u, 0.0)
 
-            if v not in isolated_nodes:
-                if not any(active[b_id] for b_id in node_to_branches.get(v, [])):
-                    isolated_nodes.add(v)
-                    lost_load += bus_loads.get(v, 0.0)
+            # if v not in isolated_nodes:
+            #     if not any(active[b_id] for b_id in node_to_branches.get(v, [])):
+            #         isolated_nodes.add(v)
+            #         lost_load += bus_loads.get(v, 0.0)
 
             if not neighbor_branches:
                 continue
@@ -406,6 +433,10 @@ def run_trial(topology_dict: Dict[str, Any], k_fault: int = 1, seed: int | None 
             failed_lines.append(ov_id)
             newly_tripped.append(ov_id)
             cascade_trips += 1
+
+        # --- 2.5. BFS: знайти всі ізольовані вузли (глобальна перевірка) ---
+    isolated_nodes = find_isolated_nodes(active, node_to_branches, branches, root=1)
+    lost_load = sum(bus_loads.get(n, 0.0) for n in isolated_nodes)
 
     # --- 3. Фінальні метрики випробування ---
     dns_proxy = min(1.0, lost_load / total_load)
@@ -680,13 +711,13 @@ class InteractiveGridSession:
                     neighbor_branches.append(b_id)
 
             # Перевірка на ізоляцію вузлів
-            for node in (u, v):
-                if node not in self.isolated_nodes:
-                    if not any(self.active[b_id] for b_id in node_to_branches.get(node, [])):
-                        self.isolated_nodes.add(node)
-                        loss = bus_loads.get(node, 0.0)
-                        self.lost_load += loss
-                        self.logs.append(f"⚠️ [Ізоляція] Вузол {node} повністю відрізано від мережі! Втрачено {loss:.1f} МВт.")
+            # for node in (u, v):
+            #     if node not in self.isolated_nodes:
+            #         if not any(self.active[b_id] for b_id in node_to_branches.get(node, [])):
+            #             self.isolated_nodes.add(node)
+            #             loss = bus_loads.get(node, 0.0)
+            #             self.lost_load += loss
+            #             self.logs.append(f"⚠️ [Ізоляція] Вузол {node} повністю відрізано від мережі! Втрачено {loss:.1f} МВт.")
 
             if not neighbor_branches:
                 continue
@@ -696,6 +727,23 @@ class InteractiveGridSession:
             for nbr, res in zip(neighbor_branches, reserves):
                 delta = (res / sum_res) * spilled
                 self.flows[nbr] += delta
+
+                # BFS: глобальна перевірка ізоляції (після кожного кроку для UI)
+            new_isolated = find_isolated_nodes(
+                self.active, 
+                self.topology.node_to_branches, 
+                self.topology.branches, 
+                root=1
+            )
+            
+            # Нові ізольовані вузли (яких ще не було)
+            newly_isolated = new_isolated - self.isolated_nodes
+            for node in newly_isolated:
+                loss = bus_loads.get(node, 0.0)
+                self.lost_load += loss
+                self.logs.append(f"⚠️ [Ізоляція] Вузол {node} відрізано від мережі! Втрачено {loss:.1f} МВт.")
+            
+            self.isolated_nodes = new_isolated
 
         # Перевірка на перевантаження
         overloaded = []
