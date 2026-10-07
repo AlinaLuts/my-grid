@@ -1,6 +1,7 @@
 # Секрети та середовище
 .env
 .venv/
+.venv-linux/
 
 # Python
 __pycache__/

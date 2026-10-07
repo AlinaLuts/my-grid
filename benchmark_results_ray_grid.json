@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "backend": "ray",
+    "trials": 100000,
+    "k_fault": 1,
+    "sample": 69411,
+    "timestamp": "2026-10-07 18:33:06"
+  },
+  "cluster": {
+    "nodes": 2,
+    "cpus": 16
+  },
+  "results": {
+    "total_execution_time_sec": 17.9318,
+    "throughput_trials_per_sec": 5576.7,
+    "p_blackout": 0.0403,
+    "avg_cascade_trips": 3.33,
+    "avg_dns": 0.043378
+  }
+}
