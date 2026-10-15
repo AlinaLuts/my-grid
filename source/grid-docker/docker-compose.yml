@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    cpus: "2.00"
+    mem_limit: 512M
+    networks:
+      - grid-net
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - grid-net
+
+networks:
+  grid-net:
+    driver: bridge
