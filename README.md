@@ -1,6 +1,6 @@
-# Практична робота: MIMD-моделювання каскадних аварій IEEE-118
+# MIMD-моделювання каскадних аварій IEEE-118
 
-Проєкт моделює стійкість енергосистеми IEEE-118 методом Монте-Карло та вимірює прискорення MIMD-реалізації на багатоядерному CPU. Модель містить **118 вузлів і 186 ліній**. Один trial є незалежним сценарієм аварії, тому trials можна розподіляти між процесами через `multiprocessing.Pool`.
+Проєкт моделює стійкість енергосистеми IEEE-118 методом Монте-Карло. Модель містить **118 вузлів і 186 ліній**. Один trial є незалежним сценарієм аварії, тому trials розподіляються між процесами через `multiprocessing.Pool`, Ray та Kubernetes.
 
 ## Структура репозиторію
 
@@ -12,93 +12,79 @@ my-grid/
 │       ├── blist.mat       # топологія ліній
 │       ├── Bf.mat          # навантаження вузлів
 │       └── Ef.mat          # потоки та пропускні здатності ліній
-├── source/grid-mimd/
-│   ├── app.py              # CLI, headless-бенчмарк і веб-візуалізація
-│   ├── engine.py           # топологія, run_trial() і multiprocessing
-│   └── ieee118_coords.json # координати вузлів для UI
+├── source/
+│   ├── grid-mimd/          # Етап 1: Локальний MIMD (multiprocessing)
+│   ├── grid-ray/           # Етап 2: Розподілений Ray Grid
+│   ├── grid-docker/        # Етап 3: Docker + Web UI
+│   └── grid-k8s/           # Етап 4: Kubernetes Job & Deployment
 ├── benchmark_results_mimd_grid.json
+├── benchmark_k8s.json
 ├── speedup.png
 └── docs/work/PLAN.md
 ```
 
-
 ## Як запустити
 
+### Етап 1: Локальний MIMD (Bare-Metal)
 З кореня репозиторію:
-
 ```powershell
-# Швидка перевірка
-python source/grid-mimd/app.py --headless --trials 1000 --workers 1,2,4 --k 1 --data Datasets
-
-# Мінімальний прогін для звіту
-python source/grid-mimd/app.py --headless --trials 10000 --k 1 --data Datasets
-
-# Бажаний додатковий експеримент N-2
-python source/grid-mimd/app.py --headless --trials 10000 --k 2 --data Datasets --out benchmark_k2.json --plot speedup_k2.png
+python source/grid-mimd/app.py --headless --trials 100000 --workers 1,2,4,8,12 --k 1 --sample 69411 --out benchmark_results_mimd_grid.json
 ```
 
-За замовчуванням benchmark запускається для `workers = 1, 2, 4, ..., cpu_count()`, а seed однаковий для різної кількості процесів, тому результати симуляції можна порівнювати коректно. Щоб явно задати серію воркерів, використовуйте, наприклад, `--workers 1,2,4,8,12`.
-
-### Параметри CLI
-
-| Параметр | За замовчуванням | Призначення |
-|---|---:|---|
-| `--headless` | увімкнено | консольний режим бенчмарку без UI |
-| `--trials` | `10000` | кількість незалежних Monte Carlo trial |
-| `--workers` | `1,2,4,...,cpu_count()` | список процесів через кому |
-| `--k` | `1` | початковий N-k шок, дозволено від 1 до 5 |
-| `--sample` | `87554` | індекс сценарію PowerGraph |
-| `--data` | `Datasets` | коренева папка датасету |
-| `--out` | `benchmark_results_mimd_grid.json` | JSON із результатами |
-| `--plot` | `speedup.png` | графік speedup vs workers |
-
-Для інтерактивної покрокової візуалізації можна запустити вебсервер:
-
-```powershell
-python source/grid-mimd/app.py --serve --port 8080 --data Datasets
+### Етап 2: Ray Grid
+```bash
+# Термінал 1 (Head)
+ray start --head --port=6379
+# Термінал 2 (Worker)
+ray start --address=127.0.0.1:6379 --num-cpus=4
+# Запуск
+python source/grid-ray/app_ray.py load --trials 100000 --k 1 --sample 69411
 ```
 
-Після цього відкрийте `http://localhost:8080` у браузері.
+### Етап 3: Docker
+```bash
+cd source/grid-docker
+docker compose up --build
+# Відкрити http://localhost:8080
+```
+
+### Етап 4: Kubernetes (Minikube)
+```bash
+minikube start --driver=docker --cpus=2 --memory=3072
+minikube image load grid-web:latest
+cd source/grid-k8s
+kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl apply -f grid-job.yaml
+# Експорт результатів
+kubectl logs -l workload=grid-contingency-calc --tail=200 > benchmark_k8s.json
+```
 
 ## Реалізований алгоритм
 
-1. `load_powergraph_cascades()` читає `blist.mat`, `Ef.mat` і `Bf.mat` для одного сценарію, а `build_topology()` формує вузли, лінії та список суміжності.
-2. `run_trial()` виконує зважений N-k шок: імовірність вибору лінії пропорційна $(flow / capacity)^2$.
-3. Потік вимкненої лінії розподіляється між сусідніми активними лініями пропорційно їхньому вільному резерву `capacity - flow`.
-4. Лінії з `flow > capacity` вимикаються захистом, після чого каскад повторюється до стабілізації або до досягнення критерію blackout.
-5. `simulate_trials_chunk()` обробляє пакет trial в одному процесі й повертає лише агреговані лічильники. `GridSimulationEngine.run_simulation()` розподіляє чанки через `Pool.map` та об'єднує результати.
+1. `load_powergraph_cascades()` читає `.mat` файли, `build_topology()` формує граф.
+2. `run_trial()` виконує зважений N-k шок (ймовірність пропорційна `(flow / capacity)^2`).
+3. Потік вимкненої лінії розподіляється між сусідніми лініями пропорційно вільному резерву.
+4. Лінії з `flow > capacity` вимикаються захистом (каскад).
+5. `Pool.map` / `ray.remote` / K8s Job розподіляють незалежні trials.
 
-Blackout фіксується, якщо DNS не менше 5% або вимкнено щонайменше 18 ліній, тобто понад 10% від 186.
+Blackout фіксується, якщо DNS ≥ 5% або вимкнено ≥ 18 ліній.
 
-# **Результати**
+---
 
+## Фінальний бенчмарк: Bare-Metal vs Ray vs Docker vs Kubernetes
 
-### **Blackout** 
-- **P(blackout) = 4.03%** (4030 з 100 000 trials закінчилися системним колапсом).
-- Середня глибина каскаду: `avg_cascade_trips = 3.33 ліній` після первинного удару.
-- Середній дефіцит потужності: `avg_dns = 4.34%.`
+| Критерій | Bare-Metal (MIMD) | Ray Grid | Docker | Kubernetes Job |
+| :--- | :--- | :--- | :--- | :--- |
+| **Ізоляція** | Спільна пам'ять | Процеси (емуляція на 1 ПК) | cgroups v2 | Поди (cgroups v2 + netns) |
+| **Паралелізм** | Pool(8) | 16 CPU (12 + 4) | 4 workers | parallelism: 4, completions: 8 |
+| **Холодний старт** | ~0.1 с | ~3–5 с | ~1–2 с | ~5–8 с |
+| **Відмовостійкість** | Відсутня | Ретрай окремих задач | restart: always | Kubelet + Probes + Backoff |
+| **Час (100k trials)** | **10.64 с** | 17.93 с | 20.25 с | ~20.0 с |
+| **Throughput** | **9 401 tr/s** | 5 577 tr/s | 4 938 tr/s | 5 000 tr/s |
 
-
-### **Throughput**
-
-- При 1 worker: 3 005 trials/sec
-
-- При 8 workers: 9 401 trials/sec (максимум)
-
-- При 12 workers: 6 517 trials/sec (деградація)
-
-
-### **Speedup і закон Амдала**
-
-Максимальне прискорення — 3.13x при 8 workers (ефективність 39%).
-При 12 workers speedup падає до 2.17x (ефективність 18%).
-
-Закон Амдала каже, що послідовна частина обмежує прискорення програми за рахунок розпаралелювання. Через накладні витрати на серіалізацію топології, створення процесів, збір результатів при 12 workers прискорення впало порівняно з 8 workers. 
-
-### **Топ-3 найвразливіші лінії**
-
-| # | Branch ID | Вузли | Failures | Failure rate |
-|---|-----------|-------|----------|--------------|
-| 1 | 14 | 9 ↔ 10 | 4030 | 100% |
-| 2 | 12 | 8 ↔ 9 | 4030 | 100% |
-| 3 | 8 | 5 ↔ 8 | 4030 | 100% |
+### Висновки
+1. **Bare-Metal (MIMD)** — найшвидший (9 401 tr/s), оскільки відсутні накладні витрати на віртуалізацію та мережу.
+2. **Ray Grid** — 5 577 tr/s. Добре масштабується, але має overhead на міжпроцесний обмін (IPC).
+3. **Docker** — 4 938 tr/s. ~13% overhead порівняно з bare-metal через обмеження CPU (`cpus: 2.0`).
+4. **Kubernetes Job** — ~5 000 tr/s. Забезпечує найкращу **відмовостійкість** (Kubelet, Probes, Backoff), але має найдовший холодний старт (~5–8 с).

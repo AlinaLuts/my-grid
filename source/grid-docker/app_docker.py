@@ -579,7 +579,7 @@ def _run_chunk(topology_dict, k_fault, base_seed, chunk_size=25000):
 
 GLOBAL_SESSION = None
 _STRESS_MODE = False
-_CURRENT_SAMPLE = 87554
+_CURRENT_SAMPLE = 69411
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -597,7 +597,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"status":"ok"}')
         elif self.path == "/api/state":
             if GLOBAL_SESSION is None:
-                topo = GridTopology.build_default_ieee118()
+                topo = GridTopology.from_dataset("/app/Datasets", sample_idx=_CURRENT_SAMPLE)
                 GLOBAL_SESSION = InteractiveGridSession(topo)
             state = GLOBAL_SESSION.get_state()
             self.send_response(200)

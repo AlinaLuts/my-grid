@@ -1,0 +1,75 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: grid-contingency-calc
+  labels:
+    workload: grid-contingency-calc
+spec:
+  completions: 8 #виконати 8 задач успішно
+  parallelism: 4
+  backoffLimit: 3 #3 рази спробувати перезапустити контейнер у разі помилки
+  activeDeadlineSeconds: 900 # 15 хвилин
+  template:
+    metadata:
+      labels:
+        workload: grid-contingency-calc
+    spec:
+      restartPolicy: OnFailure #перезапуск контейнера у разі помилки
+      containers:
+        - name: grid-worker
+          image: grid-web:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "1500m"
+              memory: "1Gi"
+          command: ["python", "-c"]
+          args:
+            - |
+              import os, sys, time, json
+              from engine import GridTopology, run_trial
+
+              pod_name = os.environ.get("POD_NAME", "pod-unknown")
+              # Унікальний seed для кожного поду
+              base_seed = abs(hash(pod_name)) % 1000000
+
+              print(f"[{pod_name}] 🚀 Старт розрахунку (seed={base_seed})")
+
+              topo = GridTopology.build_default_ieee118().to_dict()
+              n_trials = 12500          # 8 подів × 12500 = 100 000 trials
+              blackouts = 0
+              failed_counts = {}
+
+              t0 = time.perf_counter()
+              for i in range(n_trials):
+                  res = run_trial(topo, k_fault=1, seed=base_seed + i)
+                  if res["blackout"]:
+                      blackouts += 1
+                      for line_id in res["failed_lines"]:
+                          failed_counts[line_id] = failed_counts.get(line_id, 0) + 1
+              elapsed = time.perf_counter() - t0
+
+              top_lines = sorted(failed_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+              result = {
+                  "pod": pod_name,
+                  "seed": base_seed,
+                  "trials": n_trials,
+                  "blackouts": blackouts,
+                  "p_blackout": round(blackouts / n_trials, 4),
+                  "elapsed_sec": round(elapsed, 2),
+                  "throughput": round(n_trials / elapsed, 1),
+                  "top5_lines": [{"id": lid, "fails": c} for lid, c in top_lines],
+              }
+              print(f"RESULT_JSON: {json.dumps(result)}")
+              print(f"[{pod_name}] ✅ Завершено за {elapsed:.2f}с")
+              sys.exit(0)

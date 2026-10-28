@@ -1,0 +1,24 @@
+[grid-contingency-calc-rb7cp] 🚀 Старт розрахунку (seed=667025)
+RESULT_JSON: {"pod": "grid-contingency-calc-rb7cp", "seed": 667025, "trials": 12500, "blackouts": 790, "p_blackout": 0.0632, "elapsed_sec": 4.6, "throughput": 2718.6, "top5_lines": [{"id": 13, "fails": 790}, {"id": 10, "fails": 790}, {"id": 11, "fails": 790}, {"id": 12, "fails": 790}, {"id": 26, "fails": 790}]}
+[grid-contingency-calc-rb7cp] ✅ Завершено за 4.60с
+[grid-contingency-calc-v7ts7] 🚀 Старт розрахунку (seed=414484)
+RESULT_JSON: {"pod": "grid-contingency-calc-v7ts7", "seed": 414484, "trials": 12500, "blackouts": 762, "p_blackout": 0.061, "elapsed_sec": 4.77, "throughput": 2618.8, "top5_lines": [{"id": 64, "fails": 762}, {"id": 65, "fails": 762}, {"id": 66, "fails": 762}, {"id": 67, "fails": 762}, {"id": 68, "fails": 762}]}
+[grid-contingency-calc-v7ts7] ✅ Завершено за 4.77с
+[grid-contingency-calc-xl4wf] 🚀 Старт розрахунку (seed=309943)
+RESULT_JSON: {"pod": "grid-contingency-calc-xl4wf", "seed": 309943, "trials": 12500, "blackouts": 777, "p_blackout": 0.0622, "elapsed_sec": 4.79, "throughput": 2607.2, "top5_lines": [{"id": 178, "fails": 777}, {"id": 176, "fails": 777}, {"id": 177, "fails": 777}, {"id": 179, "fails": 777}, {"id": 167, "fails": 777}]}
+[grid-contingency-calc-xl4wf] ✅ Завершено за 4.79с
+[grid-contingency-calc-8pjs8] 🚀 Старт розрахунку (seed=695471)
+RESULT_JSON: {"pod": "grid-contingency-calc-8pjs8", "seed": 695471, "trials": 12500, "blackouts": 788, "p_blackout": 0.063, "elapsed_sec": 4.56, "throughput": 2743.9, "top5_lines": [{"id": 79, "fails": 788}, {"id": 74, "fails": 788}, {"id": 80, "fails": 788}, {"id": 81, "fails": 788}, {"id": 82, "fails": 788}]}
+[grid-contingency-calc-8pjs8] ✅ Завершено за 4.56с
+[grid-contingency-calc-c5q8v] 🚀 Старт розрахунку (seed=4443)
+RESULT_JSON: {"pod": "grid-contingency-calc-c5q8v", "seed": 4443, "trials": 12500, "blackouts": 759, "p_blackout": 0.0607, "elapsed_sec": 4.75, "throughput": 2633.9, "top5_lines": [{"id": 103, "fails": 759}, {"id": 76, "fails": 759}, {"id": 101, "fails": 759}, {"id": 104, "fails": 759}, {"id": 58, "fails": 759}]}
+[grid-contingency-calc-c5q8v] ✅ Завершено за 4.75с
+[grid-contingency-calc-h8s2b] 🚀 Старт розрахунку (seed=85195)
+RESULT_JSON: {"pod": "grid-contingency-calc-h8s2b", "seed": 85195, "trials": 12500, "blackouts": 786, "p_blackout": 0.0629, "elapsed_sec": 4.72, "throughput": 2649.6, "top5_lines": [{"id": 46, "fails": 786}, {"id": 45, "fails": 786}, {"id": 48, "fails": 786}, {"id": 42, "fails": 786}, {"id": 40, "fails": 786}]}
+[grid-contingency-calc-h8s2b] ✅ Завершено за 4.72с
+[grid-contingency-calc-nkswm] 🚀 Старт розрахунку (seed=100952)
+RESULT_JSON: {"pod": "grid-contingency-calc-nkswm", "seed": 100952, "trials": 12500, "blackouts": 759, "p_blackout": 0.0607, "elapsed_sec": 4.63, "throughput": 2697.9, "top5_lines": [{"id": 103, "fails": 759}, {"id": 76, "fails": 759}, {"id": 101, "fails": 759}, {"id": 104, "fails": 759}, {"id": 58, "fails": 759}]}
+[grid-contingency-calc-nkswm] ✅ Завершено за 4.63с
+[grid-contingency-calc-r8crw] 🚀 Старт розрахунку (seed=554348)
+RESULT_JSON: {"pod": "grid-contingency-calc-r8crw", "seed": 554348, "trials": 12500, "blackouts": 727, "p_blackout": 0.0582, "elapsed_sec": 4.71, "throughput": 2654.9, "top5_lines": [{"id": 103, "fails": 727}, {"id": 76, "fails": 727}, {"id": 101, "fails": 727}, {"id": 104, "fails": 727}, {"id": 58, "fails": 727}]}
+[grid-contingency-calc-r8crw] ✅ Завершено за 4.71с
